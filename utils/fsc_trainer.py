@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 
 from datasets.fsc_data import FSCData
 from models.convtrans import VGG16Trans
-from losses.losses import DownMSELoss
+from losses.losses import DownMSELoss, PatchNCELoss
 from utils.trainer import Trainer
 from utils.helper import Save_Handle, AverageMeter
 
@@ -23,8 +23,9 @@ def train_collate(batch):
     transposed_batch = list(zip(*batch))
     images = torch.stack(transposed_batch[0], 0)
     dmaps = torch.stack(transposed_batch[1], 0)
-    ex_list = transposed_batch[2]
-    return images, dmaps, ex_list
+    ones_map = torch.stack(transposed_batch[2], 0)
+    ex_list = transposed_batch[3]
+    return images, dmaps, ones_map, ex_list
 
 
 class FSCTrainer(Trainer):
@@ -56,7 +57,8 @@ class FSCTrainer(Trainer):
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-        self.criterion = DownMSELoss(args.dcsize)
+        self.criterionMSE = DownMSELoss(args.dcsize)
+        self.criterionNCE = [PatchNCELoss(args.temp), PatchNCELoss(args.temp), PatchNCELoss(args.temp)]
 
         self.save_list = Save_Handle(max_num=args.max_model_num)
         self.best_mae = np.inf
@@ -96,37 +98,48 @@ class FSCTrainer(Trainer):
                 self.val_epoch()
 
     def train_epoch(self):
-        epoch_loss = AverageMeter()
+        epoch_loss_mse = AverageMeter()
+        epoch_loss_nce = AverageMeter()
         epoch_mae = AverageMeter()
         epoch_mse = AverageMeter()
         epoch_start = time.time()
         self.model.train()
 
         # Iterate over data.
-        for inputs, targets, ex_list in tqdm(self.dataloaders['train']):
+        for inputs, targets, ones_map, ex_list in tqdm(self.dataloaders['train']):
             inputs = inputs.to(self.device)
             targets = targets.to(self.device) * self.args.log_param
+            N = inputs.size(0)
 
             with torch.set_grad_enabled(True):
-                et_dmaps = self.model(inputs)
-                loss = self.criterion(et_dmaps, targets)
-
                 self.optimizer.zero_grad()
-                loss.backward()
+
+                et_dmaps = self.model(inputs)
+                mse_loss = self.criterionMSE(et_dmaps, targets)
+                mse_loss.backward()
+                epoch_loss_mse.update(mse_loss.item(), N)
+
+                # query, feat_pos, feat_neg = self.model.extract_feat(inputs, ones_map, examplers=None)
+                nce_loss = self.model.calculate_NCE_loss(inputs, ones_map, self.criterionNCE, examplers=None,
+                                                         nce_weight=self.args.lambda_nce)
+                nce_loss.backward()
+                epoch_loss_nce.update(nce_loss.item(), N)
+
                 self.optimizer.step()
 
-                N = inputs.size(0)
                 pre_count = torch.sum(et_dmaps.view(N, -1), dim=1).detach().cpu().numpy()
                 gd_count = torch.sum(targets.view(N, -1), dim=1).detach().cpu().numpy()
                 res = pre_count - gd_count
-                epoch_loss.update(loss.item(), N)
                 epoch_mse.update(np.mean(res * res), N)
                 epoch_mae.update(np.mean(abs(res)), N)
 
-        logging.info('Epoch {} Train, Loss: {:.2f}, MSE: {:.2f} MAE: {:.2f}, Cost {:.1f} sec'
-                     .format(self.epoch, epoch_loss.get_avg(), np.sqrt(epoch_mse.get_avg()), epoch_mae.get_avg(),
+        logging.info('Epoch {} Train, MSE Loss: {:.2f}, CL Loss: {:.2f}, MSE: {:.2f} MAE: {:.2f}, Cost {:.1f} sec'
+                     .format(self.epoch, epoch_loss_mse.get_avg(), epoch_loss_nce.get_avg(),
+                             np.sqrt(epoch_mse.get_avg()),
+                             epoch_mae.get_avg(),
                              time.time() - epoch_start))
-        wandb.log({'Train/loss': epoch_loss.get_avg(),
+        wandb.log({'Train/loss_mse': epoch_loss_mse.get_avg(),
+                   'Train/loss_nce': epoch_loss_nce.get_avg(),
                    'Train/lr': self.scheduler.get_last_lr()[0],
                    'Train/epoch_mae': epoch_mae.get_avg()}, step=self.epoch)
 

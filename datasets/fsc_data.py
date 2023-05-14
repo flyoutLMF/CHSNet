@@ -4,6 +4,7 @@ from glob import glob
 import torch
 
 import torch.utils.data as data
+import torchvision.transforms
 import torchvision.transforms.functional as F
 from torchvision import transforms
 import numpy as np
@@ -65,16 +66,16 @@ class FSCData(data.Dataset):
             y2 = bbox[2][1]
             rects.append([y1, x1, y2, x2])
         rects = np.array(rects)
-        points = np.array(anno['points'])
+        points = np.array(anno['points'])  # [W,H]*n
 
         try:
-            img = Image.open(img_path).convert('RGB')
-            dmap = np.load(gd_path)
+            img = Image.open(img_path).convert('RGB')  # W,H,C
+            dmap = np.load(gd_path)  # W,H,C
             dmap = dmap.astype(np.float32, copy=False)  # np.float64 -> np.float32 to save memory
         except:
             raise Exception('Image open error {}'.format(im_id))
         
-        sample = [img,rects,dmap,points,im_id]
+        sample = [img, rects, dmap, points, im_id]
         
         if self.method == 'train':
             return self.train_transform(sample)
@@ -83,6 +84,7 @@ class FSCData(data.Dataset):
 
     def train_transform(self, sample):
         img, rects, dmap, points, name = sample
+        # print(name)
         wd, ht = img.size
 
         # crop examplar
@@ -104,21 +106,37 @@ class FSCData(data.Dataset):
             dmap = cv2.resize(dmap, (wd, ht))
             ratio = (raw_size[0]*raw_size[1])/(wd*ht)
             dmap = dmap * ratio
+        else:
+            re_size = 1.
+        ones_map = np.zeros((ht, wd))
+        for i in points:
+            ih, iw = int(i[1] * re_size), int(i[0] * re_size)
+            ih = ht - 1 if ih >= ht else ih
+            iw = wd - 1 if iw >= wd else iw
+            ones_map[ih, iw] = 1
+
+        # print(np.count_nonzero(ones_map))
 
         # random crop augmentation
         hi, wi, h, w = random_crop(ht, wd, self.c_size, self.c_size)
         img = img.crop((wi, hi, wi+w, hi+h))
         dmap = dmap[hi:hi+h, wi:wi+w]
+        ones_map = ones_map[hi:hi+h, wi:wi+w]
+        # img.show()
+        # cv2.imshow("dmap", np.clip(np.uint8(dmap * 255 * 255), 0, 255))
+        # cv2.waitKey()
+        # cv2.imshow("onesmap", np.clip(np.uint8(ones_map * 255), 0, 255))
+        # cv2.waitKey()
 
         # random horizontal flip
         if random.random() > 0.5:
             img = F.hflip(img)
             dmap = np.fliplr(dmap)
+            ones_map = np.fliplr(ones_map)
 
         dmap = Image.fromarray(dmap)
-
-        return self.trans_img(img), self.trans_dmap(dmap), [self.trans_img(ex) for ex in examplars]
-        # return img, dmap, examplars
+        ones_map = self.trans_dmap(Image.fromarray(ones_map))
+        return self.trans_img(img), self.trans_dmap(dmap), ones_map, [self.trans_img(ex) for ex in examplars]
     
     def val_transform(self, sample):
         img, rects, dmap, points, name = sample
@@ -132,5 +150,4 @@ class FSCData(data.Dataset):
         img = self.trans_img(img)
         count = np.sum(dmap)
         return img, count, [self.trans_img(ex) for ex in examplars], name
-    
 

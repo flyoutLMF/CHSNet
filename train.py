@@ -1,9 +1,9 @@
+import wandb
 import argparse
 import os
 import torch
 import numpy as np
 import random
-import wandb
 
 from utils.fsc_trainer import FSCTrainer
 
@@ -39,6 +39,9 @@ def parse_args():
     parser.add_argument('--save-all', type=bool, default=False, help='whether to save all best model')
     parser.add_argument('--max-model-num', type=int, default=1, help='max models num to save ')
     parser.add_argument('--resume', default='', help='the path of resume training model')
+
+    parser.add_argument('--temp', default=0.07, help='temperature for NCE')
+    parser.add_argument('--lambda-nce', default=1.0, help='weight for NCE loss')
     args = parser.parse_args()
     return args
 

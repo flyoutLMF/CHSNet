@@ -28,6 +28,37 @@ class ConvBlock(nn.Module):
             return self.body(x)
 
 
+class Encoder(nn.Module):
+    def __init__(self):
+        super(Encoder, self).__init__()
+        self.encoder1 = nn.Sequential(
+            ConvBlock(cin=3, cout=64),
+            ConvBlock(cin=64, cout=64),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+            ConvBlock(cin=64, cout=128),
+            ConvBlock(cin=128, cout=128),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+            ConvBlock(cin=128, cout=256),
+            ConvBlock(cin=256, cout=256),
+            ConvBlock(cin=256, cout=256),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+        )
+        self.encoder2 = nn.Sequential(
+            ConvBlock(cin=256, cout=512),
+            ConvBlock(cin=512, cout=512),
+            ConvBlock(cin=512, cout=512),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+            ConvBlock(cin=512, cout=512),
+            ConvBlock(cin=512, cout=512),
+            ConvBlock(cin=512, cout=512),
+        )
+
+    def forward(self, x):
+        x1 = self.encoder1(x)
+        out = self.encoder2(x1)
+        return x1, out
+
+
 class OutputNet(nn.Module):
     def __init__(self, dim=512):
         super().__init__()

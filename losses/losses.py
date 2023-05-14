@@ -15,3 +15,25 @@ class DownMSELoss(nn.Module):
         b, c, h, w = dmap.size()
         assert gt_density.size() == dmap.size()
         return self.mse(dmap, gt_density)
+
+
+class PatchNCELoss(nn.Module):
+    def __init__(self, temp):
+        super().__init__()
+        self.T = temp
+
+    def forward(self, query, feat_k_pos, feat_k_neg):
+        """
+        query: [1, dim_feat], dim_feat=256
+        feat_k_pos: positive features, [num, dim_feat]
+        feat_k_neg: negative features, [256, dim_feat]
+        """
+        feat_k_pos = feat_k_pos.detach()
+        feat_k_neg = feat_k_neg.detach()
+        pos = query.mm(feat_k_pos.permute(1, 0).contiguous()) / self.T  # [1, num]
+        neg = query.mm(feat_k_neg.permute(1, 0).contiguous()) / self.T  # [1, 256]
+        exp_pos = pos.exp()  # [1, num]
+        exp_neg = neg.exp().sum(dim=1, keepdim=True).repeat(1, pos.shape[1])  # [1, num]
+        softmax_term = exp_pos / (exp_pos + exp_neg)  # [1, num]
+        NCE_loss = - softmax_term.log().mean()  # cross entropy
+        return NCE_loss
