@@ -17,12 +17,15 @@ def img_show(name, tensor):
     img.show(name)
 
 
-
 def find_dis(point):
-    square = np.sum(point*point, axis=1)
-    dis = np.sqrt(np.maximum(square[:, None] - 2*np.matmul(point, point.T) + square[None, :], 0.0))
-    # 快速排序的划分函数，找出第0,1,2,3近的四个点，第0个是自己
-    dis = np.mean(np.partition(dis, 1, axis=1)[:, 1:2])
+    try:
+        square = np.sum(point*point, axis=1)
+        dis = np.sqrt(np.maximum(square[:, None] - 2*np.matmul(point, point.T) + square[None, :], 0.0))
+        # 快速排序的划分函数，找出第0,1,2,3近的四个点，第0个是自己
+        dis = np.mean(np.partition(dis, 1, axis=1)[:, 1:2])
+    except Exception as e:
+        print(e)
+        dis = 32
     return dis
 
 
