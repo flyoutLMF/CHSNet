@@ -122,8 +122,10 @@ class FSCTrainer(Trainer):
                 # query, feat_pos, feat_neg = self.model.extract_feat(inputs, ones_map, examplers=None)
                 nce_loss = self.model.calculate_NCE_loss(inputs, ones_map, self.criterionNCE, examplers=None,
                                                          nce_weight=self.args.lambda_nce)
-                nce_loss.backward()
-                epoch_loss_nce.update(nce_loss.item(), N)
+                if isinstance(nce_loss, torch.Tensor):
+                    nce_loss.backward()
+                    nce_loss = nce_loss.item()
+                epoch_loss_nce.update(nce_loss, N)
 
                 self.optimizer.step()
 

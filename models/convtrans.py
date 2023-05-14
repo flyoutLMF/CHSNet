@@ -82,6 +82,8 @@ class VGG16Trans(nn.Module):
         total_nce_loss = 0.0
         for i in range(x.shape[0]):
             points = self.ones2points(ones_map[i])
+            if len(points) < 3:
+                continue
             exp_ = None
             if examplers is not None:
                 exp_ = [e[i].unsqueeze(0) for e in examplers]
