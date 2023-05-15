@@ -52,13 +52,13 @@ class FSCTrainer(Trainer):
                                                       num_workers=args.num_workers, pin_memory=True)
         self.dataloaders = {'train': train_dataloaders, 'val': val_dataloaders}
 
-        self.model = VGG16Trans(dcsize=args.dcsize)
+        self.model = VGG16Trans(dcsize=args.dcsize, args=args)
         self.model.to(self.device)
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
         self.criterionMSE = DownMSELoss(args.dcsize)
-        self.criterionNCE = [PatchNCELoss(args.temp), PatchNCELoss(args.temp), PatchNCELoss(args.temp)]
+        self.criterionNCE = [PatchNCELoss(args.temp), PatchNCELoss(args.temp)]
 
         self.save_list = Save_Handle(max_num=args.max_model_num)
         self.best_mae = np.inf
@@ -71,7 +71,8 @@ class FSCTrainer(Trainer):
             suf = args.resume.rsplit('.', 1)[-1]
             if suf == 'tar':
                 checkpoint = torch.load(args.resume, self.device)
-                self.model.load_state_dict(checkpoint['model_state_dict'])
+                # self.model.load_state_dict(checkpoint['model_state_dict'])
+                self.model_resume(checkpoint['model_state_dict'])
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 self.start_epoch = checkpoint['epoch'] + 1
                 self.best_mae = checkpoint['best_mae']
@@ -110,23 +111,21 @@ class FSCTrainer(Trainer):
             inputs = inputs.to(self.device)
             targets = targets.to(self.device) * self.args.log_param
             N = inputs.size(0)
-
             with torch.set_grad_enabled(True):
                 self.optimizer.zero_grad()
-
-                et_dmaps = self.model(inputs)
-                mse_loss = self.criterionMSE(et_dmaps, targets)
-                mse_loss.backward()
-                epoch_loss_mse.update(mse_loss.item(), N)
-
-                # query, feat_pos, feat_neg = self.model.extract_feat(inputs, ones_map, examplers=None)
-                nce_loss = self.model.calculate_NCE_loss(inputs, ones_map, self.criterionNCE, examplers=None,
-                                                         nce_weight=self.args.lambda_nce)
-                if isinstance(nce_loss, torch.Tensor):
-                    nce_loss.backward()
-                    nce_loss = nce_loss.item()
-                epoch_loss_nce.update(nce_loss, N)
-
+                if self.epoch < self.args.warm_up:
+                    et_dmaps = self.model(inputs)
+                    mse_loss = self.criterionMSE(et_dmaps, targets)
+                    mse_loss.backward()
+                    epoch_loss_mse.update(mse_loss.item(), N)
+                else:
+                    loss, mse_item, nce_item, et_dmaps = self.model.calculate_loss(inputs, targets, ones_map,
+                                                                                   self.criterionMSE,
+                                                                                   self.criterionNCE,
+                                                                                   examplers=None)
+                    loss.backward()
+                    epoch_loss_mse.update(mse_item, N)
+                    epoch_loss_nce.update(nce_item, N)
                 self.optimizer.step()
 
                 pre_count = torch.sum(et_dmaps.view(N, -1), dim=1).detach().cpu().numpy()
@@ -134,12 +133,14 @@ class FSCTrainer(Trainer):
                 res = pre_count - gd_count
                 epoch_mse.update(np.mean(res * res), N)
                 epoch_mae.update(np.mean(abs(res)), N)
-
-        logging.info('Epoch {} Train, MSE Loss: {:.2f}, CL Loss: {:.2f}, MSE: {:.2f} MAE: {:.2f}, Cost {:.1f} sec'
-                     .format(self.epoch, epoch_loss_mse.get_avg(), epoch_loss_nce.get_avg(),
-                             np.sqrt(epoch_mse.get_avg()),
-                             epoch_mae.get_avg(),
-                             time.time() - epoch_start))
+        if self.epoch < self.args.warm_up:
+            logging.info('Epoch {} Train, MSE Loss: {:.2f}, MSE: {:.2f} MAE: {:.2f}, Cost {:.1f} sec'
+                         .format(self.epoch, epoch_loss_mse.get_avg(), np.sqrt(epoch_mse.get_avg()),
+                                 epoch_mae.get_avg(), time.time() - epoch_start))
+        else:
+            logging.info('Epoch {} Train, MSE Loss: {:.2f}, CL Loss: {:.2f}, MSE: {:.2f} MAE: {:.2f}, Cost {:.1f} sec'
+                         .format(self.epoch, epoch_loss_mse.get_avg(), epoch_loss_nce.get_avg(),
+                                 np.sqrt(epoch_mse.get_avg()), epoch_mae.get_avg(), time.time() - epoch_start))
         wandb.log({'Train/loss_mse': epoch_loss_mse.get_avg(),
                    'Train/loss_nce': epoch_loss_nce.get_avg(),
                    'Train/lr': self.scheduler.get_last_lr()[0],
@@ -229,4 +230,9 @@ class FSCTrainer(Trainer):
                        'Val/MSE': mse,
                       }, step=self.epoch)
 
-
+    def model_resume(self, ckpt):
+        mis = 'sampler.mlp_0.0.weight'
+        our_ckpt = self.model.state_dict()
+        if our_ckpt[mis].shape != ckpt[mis].shape:
+            ckpt[mis] = our_ckpt[mis]
+        self.model.load_state_dict(ckpt)

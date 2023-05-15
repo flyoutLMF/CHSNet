@@ -13,13 +13,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train ')
     parser.add_argument('--tag', default='chsnet', help='tag of training')
     parser.add_argument('--device', default='0', help='assign device')
-    parser.add_argument('--no-wandb',  action='store_true', default=False, help='whether to use wandb')
+    parser.add_argument('--no-wandb',  action='store_true', default=True, help='whether to use wandb')
 
     parser.add_argument('--data-dir', default=r'./datasets/FSC', help='training data directory')
     parser.add_argument('--log-param', type=float, default=100.0, help='dmap scale factor')
     parser.add_argument('--crop-size', type=int, default=384, help='the crop size of the train image')
     parser.add_argument('--downsample-ratio', type=int, default=16, help='downsample ratio')
-    parser.add_argument('--dcsize', type=int, default=4, help='divide count size for density map')
+    parser.add_argument('--dcsize', type=int, default=8, help='divide count size for density map')
 
     parser.add_argument('--lr', type=float, default=4*1e-5, help='the initial learning rate')
     parser.add_argument('--batch-size', type=int, default=1, help='train batch size')
@@ -27,7 +27,7 @@ def parse_args():
     parser.add_argument('--weight-decay', type=float, default=1e-5, help='the weight decay')
     parser.add_argument('--max-epoch', type=int, default=1000, help='max training epoch')
     parser.add_argument('--val-epoch', type=int, default=5, help='the num of steps to log training information')
-    parser.add_argument('--val-start', type=int, default=200, help='the epoch start to val')
+    parser.add_argument('--val-start', type=int, default=50, help='the epoch start to val')
 
     parser.add_argument('--scheduler', type=str, default='step', help='or cosine')
     parser.add_argument('--step', type=int, default=400)
@@ -40,8 +40,12 @@ def parse_args():
     parser.add_argument('--max-model-num', type=int, default=1, help='max models num to save ')
     parser.add_argument('--resume', default='', help='the path of resume training model')
 
+    parser.add_argument('--warm-up', default=51, help='temperature for NCE')
     parser.add_argument('--temp', default=0.07, help='temperature for NCE')
     parser.add_argument('--lambda-nce', default=1.0, help='weight for NCE loss')
+    parser.add_argument('--sample-method', default='NonLocal', help='the sample method for neg')
+    parser.add_argument('--feat-from', default='Attention', help='feature from')
+    parser.add_argument('--feat-get-method', default='Point', help='the method to extract feature in a sample box')
     args = parser.parse_args()
     return args
 
