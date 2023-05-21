@@ -25,7 +25,9 @@ def train_collate(batch):
     dmaps = torch.stack(transposed_batch[1], 0)
     ones_map = torch.stack(transposed_batch[2], 0)
     ex_list = transposed_batch[3]
-    return images, dmaps, ones_map, ex_list
+    dis = torch.stack(transposed_batch[4], 0)
+    seg_points = torch.stack(transposed_batch[5], 0)
+    return images, dmaps, ones_map, ex_list, dis, seg_points
 
 
 class FSCTrainer(Trainer):
@@ -107,7 +109,7 @@ class FSCTrainer(Trainer):
         self.model.train()
 
         # Iterate over data.
-        for inputs, targets, ones_map, ex_list in tqdm(self.dataloaders['train']):
+        for inputs, targets, ones_map, ex_list, dis, seg_points in tqdm(self.dataloaders['train']):
             inputs = inputs.to(self.device)
             targets = targets.to(self.device) * self.args.log_param
             N = inputs.size(0)
@@ -122,6 +124,7 @@ class FSCTrainer(Trainer):
                     loss, mse_item, nce_item, et_dmaps = self.model.calculate_loss(inputs, targets, ones_map,
                                                                                    self.criterionMSE,
                                                                                    self.criterionNCE,
+                                                                                   dis, seg_points,
                                                                                    examplers=None)
                     loss.backward()
                     epoch_loss_mse.update(mse_item, N)

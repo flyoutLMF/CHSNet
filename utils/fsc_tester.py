@@ -42,16 +42,18 @@ class FSCTester(Trainer):
                                      num_workers=args.num_workers, pin_memory=True)
         self.dataloaders = {'val': val_dataloaders, 'test': test_dataloaders}
 
-        self.model = VGG16Trans(dcsize=args.dcsize, load_weights=True)
+        self.model = VGG16Trans(dcsize=args.dcsize, load_weights=True, args=args)
         self.model.to(self.device)
 
         if args.resume:
             suf = args.resume.rsplit('.', 1)[-1]
             if suf == 'tar':
                 checkpoint = torch.load(args.resume, self.device)
-                self.model.load_state_dict(checkpoint['model_state_dict'])
+                self.model_resume(checkpoint['model_state_dict'])
             elif suf == 'pth':
-                self.model.load_state_dict(torch.load(args.resume, self.device))
+                # self.model.load_state_dict(torch.load(args.resume, self.device))
+                self.model_resume(torch.load(args.resume, self.device))
+
 
     def test(self):
         self.train()
@@ -112,7 +114,7 @@ class FSCTester(Trainer):
             cv2.imwrite(os.path.join(root, name[0]), np.uint8(np_img))
             # torchvision.io.image.write_png(output.cpu(), os.path.join(root, name[0]))
             result_json[name[0]] = {'gt': count[0].item(), 'pre': pre_count.item()}
-            epoch_res.append(count[0].item() - pre_count.item() / self.args.log_param)
+            epoch_res.append(count[0].item() - pre_count.item())
             # epoch_res.append(count[0].item())
 
         epoch_res = np.array(epoch_res)
@@ -125,3 +127,11 @@ class FSCTester(Trainer):
 
         logging.info('{}: MSE: {:.2f} MAE: {:.2f}, Cost {:.1f} sec'
                      .format(mode, mse, mae, time.time() - epoch_start))
+
+    def model_resume(self, ckpt):
+        misses = ["sampler.mlp_0.0.weight", "sampler.mlp_0.0.bias", "sampler.mlp_0.2.weight", "sampler.mlp_0.2.bias",
+               "sampler.mlp_1.0.weight", "sampler.mlp_1.0.bias", "sampler.mlp_1.2.weight", "sampler.mlp_1.2.bias"]
+        our_ckpt = self.model.state_dict()
+        for miss in misses:
+            ckpt[miss] = our_ckpt[miss]
+        self.model.load_state_dict(ckpt)

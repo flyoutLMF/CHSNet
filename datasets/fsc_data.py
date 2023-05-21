@@ -1,3 +1,4 @@
+import math
 import os
 import random
 from glob import glob
@@ -21,12 +22,14 @@ def random_crop(im_h, im_w, crop_h, crop_w):
 
 
 class FSCData(data.Dataset):
-    def __init__(self, data_path, crop_size=384, downsample_ratio=8, method='train'):
+    def __init__(self, data_path, crop_size=384, downsample_ratio=8, method='train', get_samples=True):
 
         anno_file = os.path.join(data_path, 'annotation_FSC147_384.json')
         data_split_file = os.path.join(data_path, 'Train_Test_Val_FSC_147.json')
         self.im_dir = os.path.join(data_path, 'images_384_VarV2')
         self.gt_dir = os.path.join(data_path, 'gt_density_map_adaptive_384_VarV2')
+        self.sample_dir = os.path.join(data_path, 'samples')
+        self.get_samples = get_samples
 
         with open(anno_file) as f:
             self.annotations = json.load(f)
@@ -51,8 +54,8 @@ class FSCData(data.Dataset):
     def __len__(self):
         return len(self.im_ids)
 
-    def __getitem__(self, item):
-        im_id = self.im_ids[item]
+    def __getitem__(self, index):
+        im_id = self.im_ids[index]
         img_path = os.path.join(self.im_dir, im_id)
         gd_path = os.path.join(self.gt_dir, im_id).replace('.jpg', '.npy')
 
@@ -74,16 +77,19 @@ class FSCData(data.Dataset):
             dmap = dmap.astype(np.float32, copy=False)  # np.float64 -> np.float32 to save memory
         except:
             raise Exception('Image open error {}'.format(im_id))
-        
-        sample = [img, rects, dmap, points, im_id]
-        
-        if self.method == 'train':
-            return self.train_transform(sample)
-        else:
-            return self.val_transform(sample)
+        item = [img, rects, dmap, points, im_id]
 
-    def train_transform(self, sample):
-        img, rects, dmap, points, name = sample
+        if self.method == 'train':
+            if self.get_samples:
+                samples = np.load(os.path.join(self.sample_dir, im_id).replace('.jpg', '_sample.npy'),
+                                  allow_pickle=True).item()
+                item = item + [samples['dis'], samples['negs']]
+            return self.train_transform(item)
+        else:
+            return self.val_transform(item)
+
+    def train_transform(self, item):
+        img, rects, dmap, points, name, dis, negs = item
         # print(name)
         wd, ht = img.size
 
@@ -114,7 +120,8 @@ class FSCData(data.Dataset):
             ih = ht - 1 if ih >= ht else ih
             iw = wd - 1 if iw >= wd else iw
             ones_map[ih, iw] = 1
-
+        negs = (negs * re_size).astype('int64')  # H W * n
+        dis = math.ceil(dis * re_size)  # half
         # print(np.count_nonzero(ones_map))
 
         # random crop augmentation
@@ -122,6 +129,20 @@ class FSCData(data.Dataset):
         img = img.crop((wi, hi, wi+w, hi+h))
         dmap = dmap[hi:hi+h, wi:wi+w]
         ones_map = ones_map[hi:hi+h, wi:wi+w]
+        lower_lim = [hi + dis, wi + dis]
+        higher_lim = [hi + h - dis - 1, wi + w - dis - 1]
+        negs = negs[np.all((negs >= lower_lim), axis=1)]
+        negs = negs[np.all((negs <= higher_lim), axis=1)]
+        negs = negs - lower_lim
+        if negs.shape[0] < 256:
+            try:
+                ratio = math.ceil(256 / negs.shape[0])
+                negs = np.repeat(negs, ratio, axis=0)
+            except:
+                dis = 0
+                negs = np.zeros((260, 2))
+        negs = negs[:256]
+
         # img.show()
         # cv2.imshow("dmap", np.clip(np.uint8(dmap * 255 * 255), 0, 255))
         # cv2.waitKey()
@@ -133,10 +154,12 @@ class FSCData(data.Dataset):
             img = F.hflip(img)
             dmap = np.fliplr(dmap)
             ones_map = np.fliplr(ones_map)
+            negs[:, 1] = self.c_size - negs[:, 1] - 1
 
         dmap = Image.fromarray(dmap)
         ones_map = self.trans_dmap(Image.fromarray(ones_map))
-        return self.trans_img(img), self.trans_dmap(dmap), ones_map, [self.trans_img(ex) for ex in examplars]
+        return self.trans_img(img), self.trans_dmap(dmap), ones_map, [self.trans_img(ex) for ex in examplars],\
+               torch.Tensor([dis]), torch.Tensor(negs).long()
     
     def val_transform(self, sample):
         img, rects, dmap, points, name = sample

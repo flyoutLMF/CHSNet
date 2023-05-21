@@ -24,16 +24,16 @@ class PatchNCELoss(nn.Module):
 
     def forward(self, query, feat_k_pos, feat_k_neg):
         """
-        query: [1, dim_feat], dim_feat=256
+        query: [M, dim_feat], dim_feat=128
         feat_k_pos: positive features, [num, dim_feat]
         feat_k_neg: negative features, [256, dim_feat]
         """
         feat_k_pos = feat_k_pos.detach()
         feat_k_neg = feat_k_neg.detach()
-        pos = query.mm(feat_k_pos.permute(1, 0).contiguous()) / self.T  # [1, num]
-        neg = query.mm(feat_k_neg.permute(1, 0).contiguous()) / self.T  # [1, 256]
-        exp_pos = pos.exp()  # [1, num]
-        exp_neg = neg.exp().sum(dim=1, keepdim=True).repeat(1, pos.shape[1])  # [1, num]
-        softmax_term = exp_pos / (exp_pos + exp_neg)  # [1, num]
+        pos = query.mm(feat_k_pos.permute(1, 0).contiguous()) / self.T  # [M, num]
+        neg = query.mm(feat_k_neg.permute(1, 0).contiguous()) / self.T  # [M, 256]
+        exp_pos = pos.exp()  # [N, num]
+        exp_neg = neg.exp().sum(dim=1, keepdim=True).repeat(1, pos.shape[1])  # [M, num]
+        softmax_term = exp_pos / (exp_pos + exp_neg)  # [M, num]
         NCE_loss = - softmax_term.log().mean()  # cross entropy
         return NCE_loss

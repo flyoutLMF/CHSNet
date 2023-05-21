@@ -40,12 +40,16 @@ def parse_args():
     parser.add_argument('--max-model-num', type=int, default=1, help='max models num to save ')
     parser.add_argument('--resume', default='', help='the path of resume training model')
 
-    parser.add_argument('--warm-up', default=51, help='temperature for NCE')
-    parser.add_argument('--temp', default=0.07, help='temperature for NCE')
-    parser.add_argument('--lambda-nce', default=1.0, help='weight for NCE loss')
-    parser.add_argument('--sample-method', default='NonLocal', help='the sample method for neg')
-    parser.add_argument('--feat-from', default='Attention', help='feature from')
-    parser.add_argument('--feat-get-method', default='Point', help='the method to extract feature in a sample box')
+    parser.add_argument('--warm-up', type=int, default=-1, help='the warm up epoch num')
+    parser.add_argument('--temp', type=float, default=0.07, help='temperature for NCE')
+    parser.add_argument('--lambda-nce', type=float, default=1e-4, help='weight for NCE loss')
+    parser.add_argument('--sample-method', default='OnesMap', help='the sample method for negative samples, select from'
+                                                                   ' ["NonLocal", "Random", "OnesMap"]')
+    parser.add_argument('--feat-from', default='Attention', help='where the feature from, select from'
+                                                                 ' ["Encoder", "Attention"]')
+    parser.add_argument('--feat-get-method', default='Point', help='the method to extract feature in a sample box,'
+                                                                   ' select form ["Point", "MaxPool"]')
+    parser.add_argument('--num-query', default='cl', help='the num of query feature, select from ["cl", "all"]')
     args = parser.parse_args()
     return args
 

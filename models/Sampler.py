@@ -1,6 +1,10 @@
+import os
+
+import PIL.ImageDraw
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms
 from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
@@ -22,7 +26,7 @@ def find_dis(point):
         square = np.sum(point*point, axis=1)
         dis = np.sqrt(np.maximum(square[:, None] - 2*np.matmul(point, point.T) + square[None, :], 0.0))
         # 快速排序的划分函数，找出第0,1,2,3近的四个点，第0个是自己
-        dis = np.mean(np.partition(dis, 1, axis=1)[:, 1:2])
+        dis = np.mean(np.partition(dis, 3, axis=1)[:, 1:4])
     except Exception as e:
         print(e)
         dis = 32
@@ -48,7 +52,7 @@ def getTensorPatch(Tensor, loc, half_h, half_w):
     return Tensor[:, :, top:down, left:right]
 
 
-def getTensorLocsPatchList(tensor, patch_size, device, centers=None, count=1600):
+def getTensorLocsPatchList(tensor, patch_size, device, centers=None, count=600):
     assert centers is None or len(centers) == count
     B, C, H, W = tensor.shape
     if isinstance(patch_size, int):
@@ -66,14 +70,17 @@ def getTensorLocsPatchList(tensor, patch_size, device, centers=None, count=1600)
 
 
 class PatchSampleNonlocal(nn.Module):
-    def __init__(self, nc=256, num_patches=256,
-                 sample_method='NonLocal', feat_from='Encoder', feat_get_method='Point'):
+    def __init__(self, nc=128, num_patches=128,
+                 sample_method='NonLocal', feat_from='Attention', feat_get_method='Point'):
         # potential issues: currently, we use the same patch_ids for multiple images in the batch
         super(PatchSampleNonlocal, self).__init__()
         self.nc = nc  # hard-coded
         self.num_patches = num_patches
+        self.d_i = 0
+        self.std = torch.Tensor([0.485, 0.456, 0.406])
+        self.mean = torch.Tensor([0.229, 0.224, 0.225])
 
-        assert sample_method in ['NonLocal', 'Random']
+        assert sample_method in ['NonLocal', 'Random', 'OnesMap']
         self.sample_method = sample_method
         assert feat_from in ['Encoder', 'Attention']
         self.feat_from = feat_from
@@ -97,15 +104,16 @@ class PatchSampleNonlocal(nn.Module):
     def forward(self, feats, sample_patch=None, patch_ids=None, use_mlp=True):
         pass
 
-    def sample_neg(self, feats, sample_patch, patch_ids=None, use_mlp=True):
+    def sample_neg(self, feats, sample_patch=None, patch_ids=None, use_mlp=True, dis=0):
         """
         get feature in points
         TODO: get feature from maxpool
         """
+        assert sample_patch is not None or patch_ids is not None
         return_feats = []
-        patch_size = [sample_patch.shape[2], sample_patch.shape[3]]
         img = feats[0]
         if patch_ids is None:  # calculate the num_patches non-local keys in raw image
+            patch_size = [sample_patch.shape[2], sample_patch.shape[3]] if sample_patch is not None else [32, 32]
             if self.sample_method == 'NonLocal':
                 locs, patches = getTensorLocsPatchList(img, patch_size, img.device)
                 diff_pow = 1. - torch.pow((patches - sample_patch), 2)
@@ -121,6 +129,13 @@ class PatchSampleNonlocal(nn.Module):
                                                            size=(self.num_patches, 2)))
             else:
                 raise NotImplementedError
+        elif self.sample_method == 'OnesMap':
+            ones_map = patch_ids.unsqueeze(0)
+            ones_map = F.max_pool2d(ones_map, 16).squeeze(1).squeeze(0)
+            img = feats[-1]
+            patch_ids = torch.nonzero(ones_map == 0, as_tuple=False)
+                # patch_ids = patch_ids[:, 2:]
+
             # img_show("a", patches[index[0]].unsqueeze(0))
             # img_show("b", patches[index[-1]].unsqueeze(0))
 
@@ -145,28 +160,32 @@ class PatchSampleNonlocal(nn.Module):
             x_sample = F.normalize(x_sample, p=2, dim=1)
 
             return_feats.append(x_sample)
+        # if self.d_i <= 6370:
+        #     self.debug_visualization(img, patch_ids, dis * 2)
         return_ids = patch_ids
         return return_feats, return_ids
 
-    def sample_pos(self, feats, points, examplers=None, use_mlp=True):
+    def sample_pos(self, feats, points, dis=0, examplers=None, use_mlp=True):
         """
         get feature in a point. no use scale
         points: [H*W]*n
         """
         img = feats[0]
-        if examplers is None:
-            dis = math.ceil(find_dis(points) / 2)
-            # index = random.randint(0, len(points))
-            center = random.choice(points)
-            examplers = [getTensorPatch(img, [int(center[0]), int(center[1])], dis, dis)]
+        # if examplers is None:
+        #     dis = math.ceil(find_dis(points) / 2)
+        #     # index = random.randint(0, len(points))
+        #     center = random.choice(points)
+        #     examplers = [getTensorPatch(img, [int(center[0]), int(center[1])], dis, dis)]
         # img_show('ex', examplers[0])
 
         # max need to le the num of neg patches
-        if len(points) > self.num_patches:
+        if len(points) > self.num_patches and self.sample_method != 'OnesMap':
             points = points[:self.num_patches, :]
+        exampler_pos = random.randint(0, len(points) - 1)
         points_torch = torch.tensor(points).long().cuda()
 
         return_feats = []
+        exampler_feats = []
 
         feats = feats[1:]
         for feat_id, feat in enumerate(feats):
@@ -188,8 +207,12 @@ class PatchSampleNonlocal(nn.Module):
             x_sample = F.normalize(x_sample, p=2, dim=1)
 
             return_feats.append(x_sample)
+            exampler_feats.append(x_sample[exampler_pos, :].clone().unsqueeze(0))
 
-        return examplers[0], return_feats
+        # if self.d_i <= 6370:
+        #     self.debug_visualization(img, points_torch, dis * 2)
+
+        return exampler_feats, return_feats
 
     def apply_mlp(self, feats):
         return_feats = []
@@ -203,3 +226,19 @@ class PatchSampleNonlocal(nn.Module):
             return_feats.append(feat)
         return return_feats
 
+    def debug_visualization(self, img, points, dis):
+        self.d_i += 1
+        dis = dis // 2
+        points = points.cpu().numpy()
+        denormed_img = img.cpu().permute(0, 2, 3, 1).contiguous().squeeze(0) * self.std + self.mean
+        denormed_img = np.uint8(np.clip(denormed_img.numpy() * 255, 0, 255))
+        img1 = Image.fromarray(denormed_img)
+        draw = PIL.ImageDraw.Draw(img1)
+        for point in points:
+            pos = (point[1] - dis, point[0] - dis, point[1] + dis, point[0] + dis)
+            draw.rounded_rectangle(pos, width=2)
+        if not os.path.exists('visualization'):
+            os.mkdir('visualization')
+        img2 = Image.fromarray(denormed_img)
+        img2.save(os.path.join('visualization', str(self.d_i) + '_ori.png'))
+        img1.save(os.path.join('visualization', str(self.d_i) + '_all.png'))
