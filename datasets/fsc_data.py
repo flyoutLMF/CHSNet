@@ -133,7 +133,7 @@ class FSCData(data.Dataset):
         higher_lim = [hi + h - dis - 1, wi + w - dis - 1]
         negs = negs[np.all((negs >= lower_lim), axis=1)]
         negs = negs[np.all((negs <= higher_lim), axis=1)]
-        negs = negs - lower_lim
+        negs = negs - [hi, wi]
         if negs.shape[0] < 256:
             try:
                 ratio = math.ceil(256 / negs.shape[0])

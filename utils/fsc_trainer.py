@@ -42,7 +42,8 @@ class FSCTrainer(Trainer):
         train_datasets = FSCData(args.data_dir,
                                  args.crop_size,
                                  args.downsample_ratio,
-                                 method='train')
+                                 method='train',
+                                 get_samples=True)
         train_dataloaders = DataLoader(train_datasets,
                                        collate_fn=train_collate,
                                        batch_size=args.batch_size,

@@ -121,7 +121,7 @@ class VGG16Trans(nn.Module):
             else:
                 patch_ids = torch.Tensor(seg_points[i])
             feat_neg, _ = self.sampler.sample_neg(feats, patch_ids=patch_ids, dis=dis[i].item())  # sample for neg
-            if self.args.pos_feat == 'all':
+            if self.args.num_query == 'all':
                 query = [i.clone() for i in feat_pos]
             for q, f_k_pos, f_k_neg, crit in zip(query, feat_pos, feat_neg, criterionNCE):
                 loss = crit(q, f_k_pos, f_k_neg)

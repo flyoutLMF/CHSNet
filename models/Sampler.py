@@ -130,6 +130,7 @@ class PatchSampleNonlocal(nn.Module):
             else:
                 raise NotImplementedError
         elif self.sample_method == 'OnesMap':
+            assert self.feat_get_method == 'Point'
             ones_map = patch_ids.unsqueeze(0)
             ones_map = F.max_pool2d(ones_map, 16).squeeze(1).squeeze(0)
             img = feats[-1]
@@ -150,7 +151,24 @@ class PatchSampleNonlocal(nn.Module):
                 patch_id = patch_id.to(torch.long)
                 x_sample = feat_reshape[:, patch_id, :].flatten(0, 1)  # reshape(-1, x.shape[1])
             elif self.feat_get_method == 'MaxPool':
-                raise NotImplementedError
+                _, C, H, W = feat.shape
+                dis = int(dis * H / img.shape[2])
+                dis = 1 if dis < 1 else dis
+                pool_size = 2 * dis
+                x_sample = torch.zeros((1, C, 1, 1)).cuda()
+                patch_ids = torch.div((patch_ids * H), img.shape[2], rounding_mode='floor')
+                for p in patch_ids:
+                    try:
+                        x_sample = torch.cat([x_sample, F.max_pool2d(
+                            feat[:, :, p[0] - dis:p[0] + dis, p[1] - dis:p[1] + dis], pool_size)])
+                    except:
+                        up = p[0] - dis if p[0] - dis >= 0 else 0
+                        down = p[0] + dis if p[0] + dis < H else H - 1
+                        left = p[1] - dis if p[1] - dis >= 0 else 0
+                        right = p[1] + dis if p[1] + dis < W else W - 1
+                        x_sample = torch.cat([x_sample, F.max_pool2d(
+                            feat[:, :, up:down, left:right], (down - up, right - left))])
+                x_sample = x_sample[1:].permute(0, 2, 3, 1).contiguous().view(-1, C)
             else:
                 raise NotImplementedError
             if use_mlp:
@@ -197,7 +215,18 @@ class PatchSampleNonlocal(nn.Module):
                 patch_id = patch_id.to(torch.long)
                 x_sample = feat_reshape[:, patch_id, :].flatten(0, 1)  # reshape(-1, x.shape[1])
             elif self.feat_get_method == 'MaxPool':
-                raise NotImplementedError
+                _, C, H, W = feat.shape
+                dis = math.ceil(dis * H / img.shape[2])
+                points_torch = torch.div((points_torch * H), img.shape[2], rounding_mode='floor')
+                x_sample = torch.zeros((1, C, 1, 1)).cuda()
+                for p in points_torch:
+                    up = p[0] - dis if p[0] - dis >= 0 else 0
+                    down = p[0] + dis if p[0] + dis < H else H - 1
+                    left = p[1] - dis if p[1] - dis >= 0 else 0
+                    right = p[1] + dis if p[1] + dis < W else W - 1
+                    x_sample = torch.cat([x_sample,
+                                          F.max_pool2d(feat[:, :, up:down, left:right], (down - up, right - left))])
+                x_sample = x_sample[1:].permute(0, 2, 3, 1).contiguous().view(-1, C)
             else:
                 raise NotImplementedError
 
