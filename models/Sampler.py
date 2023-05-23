@@ -4,15 +4,15 @@ import PIL.ImageDraw
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms
-from torch.nn import init
-import functools
-from torch.optim import lr_scheduler
 import numpy as np
 import random, math
 from PIL import Image
 
+
 def img_show(name, tensor):
+    """
+    show the normalized img
+    """
     std = torch.Tensor([0.485, 0.456, 0.406])
     mean = torch.Tensor([0.229, 0.224, 0.225])
     img = tensor.cpu().permute(0, 2, 3, 1).contiguous().squeeze(0) * std + mean
@@ -34,6 +34,13 @@ def find_dis(point):
 
 
 def getTensorPatch(Tensor, loc, half_h, half_w):
+    """
+    get the patch of the tensor
+    Tensor: input img
+    loc: the center position for the patch
+    half_h: the half height of the patch
+    half_w: the half width of the patch
+    """
     h, w = Tensor.shape[2], Tensor.shape[3]
     top = loc[0] - half_h if loc[0] - half_h >= 0 else 0
     down = loc[0] + half_h if loc[0] + half_h < h else h - 1
@@ -53,6 +60,13 @@ def getTensorPatch(Tensor, loc, half_h, half_w):
 
 
 def getTensorLocsPatchList(tensor, patch_size, device, centers=None, count=600):
+    """
+    get a patch list and position list
+    tensor: input img
+    patch_size: the patch size
+    centers: the position list to get
+    count: the num of patches
+    """
     assert centers is None or len(centers) == count
     B, C, H, W = tensor.shape
     if isinstance(patch_size, int):
@@ -70,13 +84,16 @@ def getTensorLocsPatchList(tensor, patch_size, device, centers=None, count=600):
 
 
 class PatchSampleNonlocal(nn.Module):
-    def __init__(self, nc=128, num_patches=128,
+    def __init__(self, nc=128, num_patches=256,
                  sample_method='NonLocal', feat_from='Attention', feat_get_method='Point'):
-        # potential issues: currently, we use the same patch_ids for multiple images in the batch
+        """
+        nc: the output feature dimension
+        num_patches: the sampled patches number
+        """
         super(PatchSampleNonlocal, self).__init__()
-        self.nc = nc  # hard-coded
+        self.nc = nc
         self.num_patches = num_patches
-        self.d_i = 0
+        self.d_i = 0  # for debug visualization
         self.std = torch.Tensor([0.485, 0.456, 0.406])
         self.mean = torch.Tensor([0.229, 0.224, 0.225])
 
@@ -84,20 +101,19 @@ class PatchSampleNonlocal(nn.Module):
         self.sample_method = sample_method
         assert feat_from in ['Encoder', 'Attention']
         self.feat_from = feat_from
-        if feat_from == 'Encoder':
+        if feat_from == 'Encoder':  # set for mlp input dimension
             input_nc = [256, 512]
         else:
             input_nc = [512, 512]
         assert feat_get_method in ['Point', 'MaxPool']
         self.feat_get_method = feat_get_method
 
-        # self.patch_size = patch_size
         self.global_max_pool = nn.AdaptiveMaxPool2d((1, 1))
-        for mlp_id, inc in enumerate(input_nc):
+        for mlp_id, inc in enumerate(input_nc):  # mlp
             mlp = nn.Sequential(*[nn.Linear(inc, self.nc), nn.ReLU(), nn.Linear(self.nc, self.nc)])
             mlp.cuda()
             setattr(self, 'mlp_%d' % mlp_id, mlp)
-        for m in self.modules():
+        for m in self.modules():  # initialize
             if isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
 
@@ -106,35 +122,40 @@ class PatchSampleNonlocal(nn.Module):
 
     def sample_neg(self, feats, sample_patch=None, patch_ids=None, use_mlp=True, dis=0):
         """
-        get feature in points
-        TODO: get feature from maxpool
+        get negative samples
+        feats: input feature list: [original image, feature 1, feature 2]
+        sample_patch: the sample patch, which is the exampler to get the most unsimilar patch
+        patch_ids: patch center position, if is None, it will get patch_ids real time; otherwise get from pre-saved .npy
+        use_mlp: if use mlp to project feature
+        dis: the height and width of the patch
+        return: features, position
         """
         assert sample_patch is not None or patch_ids is not None
         return_feats = []
-        img = feats[0]
-        if patch_ids is None:  # calculate the num_patches non-local keys in raw image
+        img = feats[0]  # get the original image
+        if patch_ids is None:  # get non-local patch real time
             patch_size = [sample_patch.shape[2], sample_patch.shape[3]] if sample_patch is not None else [32, 32]
-            if self.sample_method == 'NonLocal':
-                locs, patches = getTensorLocsPatchList(img, patch_size, img.device)
+            if self.sample_method == 'NonLocal':  # will take a lot of time
+                locs, patches = getTensorLocsPatchList(img, patch_size, img.device)  # get patches and location
                 diff_pow = 1. - torch.pow((patches - sample_patch), 2)
-                diff_sum = torch.sum(torch.sum(torch.sum(diff_pow, 2), 2), 1)
+                diff_sum = torch.sum(torch.sum(torch.sum(diff_pow, 2), 2), 1)  # calculate the unsimilar score
                 # diff_sqr = torch.sqrt(diff_sum)  # length * 1
-                score, index = torch.topk(diff_sum, self.num_patches, largest=False, sorted=True)
+                score, index = torch.topk(diff_sum, self.num_patches, largest=False, sorted=True)  # get the tops
                 patch_ids = locs[index]
                 patch_ids = patch_ids.to(torch.long)
             elif self.sample_method == 'Random':
                 B, C, H, W = img.shape
                 half_h, half_w = int(patch_size[0] / 2), int(patch_size[1] / 2)
                 patch_ids = torch.Tensor(np.random.randint([half_h, half_w], [H - half_h, W - half_w],
-                                                           size=(self.num_patches, 2)))
+                                                           size=(self.num_patches, 2)))  # random patch_ids
             else:
                 raise NotImplementedError
-        elif self.sample_method == 'OnesMap':
+        elif self.sample_method == 'OnesMap':  # sample from the whole feature map, like similarity loss of BMNet
             assert self.feat_get_method == 'Point'
-            ones_map = patch_ids.unsqueeze(0)
+            ones_map = patch_ids.unsqueeze(0)  # the patch_ids is the ones_map of the points to be counted
             ones_map = F.max_pool2d(ones_map, 16).squeeze(1).squeeze(0)
             img = feats[-1]
-            patch_ids = torch.nonzero(ones_map == 0, as_tuple=False)
+            patch_ids = torch.nonzero(ones_map == 0, as_tuple=False)  # get all the negative sample
                 # patch_ids = patch_ids[:, 2:]
 
             # img_show("a", patches[index[0]].unsqueeze(0))
@@ -145,30 +166,23 @@ class PatchSampleNonlocal(nn.Module):
             if self.feat_get_method == 'Point':
                 B, H, W = feat.shape[0], feat.shape[2], feat.shape[3]
                 feat_reshape = feat.permute(0, 2, 3, 1).flatten(1, 2)  # (B, H*W, C)
-                feat_patch_loc = torch.div((patch_ids * H), img.shape[2], rounding_mode='floor')
+                feat_patch_loc = torch.div((patch_ids * H), img.shape[2], rounding_mode='floor')  # adjust the location
                 patch_id = feat_patch_loc[:, 0] * W + feat_patch_loc[:, 1]  # 256
                 # patch_id shape: num_patches
                 patch_id = patch_id.to(torch.long)
                 x_sample = feat_reshape[:, patch_id, :].flatten(0, 1)  # reshape(-1, x.shape[1])
             elif self.feat_get_method == 'MaxPool':
                 _, C, H, W = feat.shape
-                dis = int(dis * H / img.shape[2])
+                dis = int(dis * H / img.shape[2])  # adjust dis
                 dis = 1 if dis < 1 else dis
-                pool_size = 2 * dis
-                x_sample = torch.zeros((1, C, 1, 1)).cuda()
-                patch_ids = torch.div((patch_ids * H), img.shape[2], rounding_mode='floor')
-                for p in patch_ids:
-                    try:
-                        x_sample = torch.cat([x_sample, F.max_pool2d(
-                            feat[:, :, p[0] - dis:p[0] + dis, p[1] - dis:p[1] + dis], pool_size)])
-                    except:
-                        up = p[0] - dis if p[0] - dis >= 0 else 0
-                        down = p[0] + dis if p[0] + dis < H else H - 1
-                        left = p[1] - dis if p[1] - dis >= 0 else 0
-                        right = p[1] + dis if p[1] + dis < W else W - 1
-                        x_sample = torch.cat([x_sample, F.max_pool2d(
-                            feat[:, :, up:down, left:right], (down - up, right - left))])
-                x_sample = x_sample[1:].permute(0, 2, 3, 1).contiguous().view(-1, C)
+                H, W = math.ceil(H / dis), math.ceil(W / dis)  # the output size after maxpool
+                feat_maxpool = F.adaptive_max_pool2d(feat, (H, W))  # maxpool from the feature map
+                feat_reshape = feat_maxpool.permute(0, 2, 3, 1).flatten(1, 2)  # (B, H*W, C)
+                feat_patch_loc = torch.div((patch_ids * H), img.shape[2], rounding_mode='floor')
+                patch_id = feat_patch_loc[:, 0] * W + feat_patch_loc[:, 1]  # 256
+                # patch_id shape: num_patches
+                patch_id = patch_id.to(torch.long)
+                x_sample = feat_reshape[:, patch_id, :].flatten(0, 1)  # reshape(-1, x.shape[1])
             else:
                 raise NotImplementedError
             if use_mlp:
@@ -185,8 +199,8 @@ class PatchSampleNonlocal(nn.Module):
 
     def sample_pos(self, feats, points, dis=0, examplers=None, use_mlp=True):
         """
-        get feature in a point. no use scale
-        points: [H*W]*n
+        get positive features from the points
+        return the query and positive sample
         """
         img = feats[0]
         # if examplers is None:
@@ -216,17 +230,16 @@ class PatchSampleNonlocal(nn.Module):
                 x_sample = feat_reshape[:, patch_id, :].flatten(0, 1)  # reshape(-1, x.shape[1])
             elif self.feat_get_method == 'MaxPool':
                 _, C, H, W = feat.shape
-                dis = math.ceil(dis * H / img.shape[2])
-                points_torch = torch.div((points_torch * H), img.shape[2], rounding_mode='floor')
-                x_sample = torch.zeros((1, C, 1, 1)).cuda()
-                for p in points_torch:
-                    up = p[0] - dis if p[0] - dis >= 0 else 0
-                    down = p[0] + dis if p[0] + dis < H else H - 1
-                    left = p[1] - dis if p[1] - dis >= 0 else 0
-                    right = p[1] + dis if p[1] + dis < W else W - 1
-                    x_sample = torch.cat([x_sample,
-                                          F.max_pool2d(feat[:, :, up:down, left:right], (down - up, right - left))])
-                x_sample = x_sample[1:].permute(0, 2, 3, 1).contiguous().view(-1, C)
+                dis = int(dis * H / img.shape[2])
+                dis = 1 if dis < 1 else dis
+                H, W = math.ceil(H / dis), math.ceil(W / dis)
+                feat_maxpool = F.adaptive_max_pool2d(feat, (H, W))
+                feat_reshape = feat_maxpool.permute(0, 2, 3, 1).flatten(1, 2)  # (B, H*W, C)
+                feat_patch_loc = torch.div((points_torch * H), img.shape[2], rounding_mode='floor')
+                patch_id = feat_patch_loc[:, 0] * W + feat_patch_loc[:, 1]  # 256
+                # patch_id shape: num_patches
+                patch_id = patch_id.to(torch.long)
+                x_sample = feat_reshape[:, patch_id, :].flatten(0, 1)  # reshape(-1, x.shape[1])
             else:
                 raise NotImplementedError
 

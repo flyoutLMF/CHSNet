@@ -13,6 +13,7 @@ from PIL import Image
 import json
 import cv2
 
+
 def random_crop(im_h, im_w, crop_h, crop_w):
     res_h = im_h - crop_h
     res_w = im_w - crop_w
@@ -84,11 +85,12 @@ class FSCData(data.Dataset):
                 samples = np.load(os.path.join(self.sample_dir, im_id).replace('.jpg', '_sample.npy'),
                                   allow_pickle=True).item()
                 item = item + [samples['dis'], samples['negs']]
-            return self.train_transform(item)
+                return self.train_transform_with_sample(item)
+            return self.train_transform_without_sample(item)
         else:
             return self.val_transform(item)
 
-    def train_transform(self, item):
+    def train_transform_with_sample(self, item):
         img, rects, dmap, points, name, dis, negs = item
         # print(name)
         wd, ht = img.size
@@ -102,33 +104,34 @@ class FSCData(data.Dataset):
 
         # rescale augmentation
         re_size = random.random() * 0.5 + 0.75
-        wdd = int(wd*re_size)
-        htt = int(ht*re_size)
+        wdd = int(wd * re_size)
+        htt = int(ht * re_size)
         if min(wdd, htt) >= self.c_size:
             raw_size = (wd, ht)
             wd = wdd
             ht = htt
             img = img.resize((wd, ht))
             dmap = cv2.resize(dmap, (wd, ht))
-            ratio = (raw_size[0]*raw_size[1])/(wd*ht)
+            ratio = (raw_size[0] * raw_size[1]) / (wd * ht)
             dmap = dmap * ratio
         else:
             re_size = 1.
-        ones_map = np.zeros((ht, wd))
+        ones_map = np.zeros((ht, wd))  # get the ones map using the points
         for i in points:
             ih, iw = int(i[1] * re_size), int(i[0] * re_size)
             ih = ht - 1 if ih >= ht else ih
             iw = wd - 1 if iw >= wd else iw
             ones_map[ih, iw] = 1
-        negs = (negs * re_size).astype('int64')  # H W * n
+        negs = (negs * re_size).astype('int64')  # (H, W) * n
         dis = math.ceil(dis * re_size)  # half
         # print(np.count_nonzero(ones_map))
 
         # random crop augmentation
         hi, wi, h, w = random_crop(ht, wd, self.c_size, self.c_size)
-        img = img.crop((wi, hi, wi+w, hi+h))
-        dmap = dmap[hi:hi+h, wi:wi+w]
-        ones_map = ones_map[hi:hi+h, wi:wi+w]
+        img = img.crop((wi, hi, wi + w, hi + h))
+        dmap = dmap[hi:hi + h, wi:wi + w]
+        ones_map = ones_map[hi:hi + h, wi:wi + w]
+        # get the negative samples in the crop
         lower_lim = [hi + dis, wi + dis]
         higher_lim = [hi + h - dis - 1, wi + w - dis - 1]
         negs = negs[np.all((negs >= lower_lim), axis=1)]
@@ -138,7 +141,7 @@ class FSCData(data.Dataset):
             try:
                 ratio = math.ceil(256 / negs.shape[0])
                 negs = np.repeat(negs, ratio, axis=0)
-            except:
+            except:  # no sample
                 dis = 0
                 negs = np.zeros((260, 2))
         negs = negs[:256]
@@ -158,9 +161,59 @@ class FSCData(data.Dataset):
 
         dmap = Image.fromarray(dmap)
         ones_map = self.trans_dmap(Image.fromarray(ones_map))
-        return self.trans_img(img), self.trans_dmap(dmap), ones_map, [self.trans_img(ex) for ex in examplars],\
+        return self.trans_img(img), self.trans_dmap(dmap), ones_map, [self.trans_img(ex) for ex in examplars], \
                torch.Tensor([dis]), torch.Tensor(negs).long()
-    
+
+    def train_transform_without_sample(self, item):
+        img, rects, dmap, points, name = item
+        # print(name)
+        wd, ht = img.size
+
+        # crop examplar
+        examplars = []
+        rects = rects.astype(np.int)
+        for y1, x1, y2, x2 in rects:
+            tmp_ex = img.crop((x1, y1, x2, y2))
+            examplars.append(tmp_ex)
+
+        # rescale augmentation
+        re_size = random.random() * 0.5 + 0.75
+        wdd = int(wd * re_size)
+        htt = int(ht * re_size)
+        if min(wdd, htt) >= self.c_size:
+            raw_size = (wd, ht)
+            wd = wdd
+            ht = htt
+            img = img.resize((wd, ht))
+            dmap = cv2.resize(dmap, (wd, ht))
+            ratio = (raw_size[0] * raw_size[1]) / (wd * ht)
+            dmap = dmap * ratio
+        else:
+            re_size = 1.
+        ones_map = np.zeros((ht, wd))
+        for i in points:
+            ih, iw = int(i[1] * re_size), int(i[0] * re_size)
+            ih = ht - 1 if ih >= ht else ih
+            iw = wd - 1 if iw >= wd else iw
+            ones_map[ih, iw] = 1
+
+        # random crop augmentation
+        hi, wi, h, w = random_crop(ht, wd, self.c_size, self.c_size)
+        img = img.crop((wi, hi, wi + w, hi + h))
+        dmap = dmap[hi:hi + h, wi:wi + w]
+        ones_map = ones_map[hi:hi + h, wi:wi + w]
+
+        # random horizontal flip
+        if random.random() > 0.5:
+            img = F.hflip(img)
+            dmap = np.fliplr(dmap)
+            ones_map = np.fliplr(ones_map)
+
+        dmap = Image.fromarray(dmap)
+        ones_map = self.trans_dmap(Image.fromarray(ones_map))
+        return self.trans_img(img), self.trans_dmap(dmap), ones_map, [self.trans_img(ex) for ex in examplars], \
+               torch.Tensor([0]), torch.Tensor([0])
+
     def val_transform(self, sample):
         img, rects, dmap, points, name = sample
         # crop examplar
@@ -173,4 +226,3 @@ class FSCData(data.Dataset):
         img = self.trans_img(img)
         count = np.sum(dmap)
         return img, count, [self.trans_img(ex) for ex in examplars], name
-
