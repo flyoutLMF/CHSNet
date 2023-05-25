@@ -48,7 +48,7 @@ def parse_args():
                                                                     ' select from ["NonLocal", "Random", "OnesMap"]')
     parser.add_argument('--feat-from', default='Attention', help='where the feature from, select from'
                                                                  ' ["Encoder", "Attention"]')
-    parser.add_argument('--feat-get-method', default='MaxPool', help='the method to extract feature in a sample box,'
+    parser.add_argument('--feat-get-method', default='Point', help='the method to extract feature in a sample box,'
                                                                    ' select form ["Point", "MaxPool"]')
     parser.add_argument('--num-query', default='cl', help='the num of query feature, select from ["cl", "all"]')
     args = parser.parse_args()
