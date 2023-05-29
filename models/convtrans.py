@@ -5,7 +5,7 @@ import torchvision
 import collections
 from models.transformer_module import Transformer
 from models.convolution_module import Encoder, OutputNet, ConvBlock, NonLocalAttention
-from models.Sampler import PatchSampleNonlocal
+from models.Sampler import PatchSampler
 from PIL.Image import BICUBIC
 import time
 
@@ -13,7 +13,7 @@ class VGG16Trans(nn.Module):
     def __init__(self, dcsize, batch_norm=True, load_weights=False, args=None):
         super().__init__()
         self.args = args
-        self.scale_factor = 16//dcsize
+        self.scale_factor = 16 // dcsize
         self.encoder = Encoder()
         # self.encoder = nn.Sequential(
         #     ConvBlock(cin=3, cout=64),
@@ -38,10 +38,10 @@ class VGG16Trans(nn.Module):
         self.tran_decoder_p2 = OutputNet(dim=512)
 
         try:
-            self.sampler = PatchSampleNonlocal(sample_method=self.args.sample_method,
-                                               feat_from=self.args.feat_from, feat_get_method=self.args.feat_get_method)
+            self.sampler = PatchSampler(sample_method=self.args.sample_method,
+                                        feat_from=self.args.feat_from, feat_get_method=self.args.feat_get_method)
         except:  # for test
-            self.sampler = PatchSampleNonlocal()
+            self.sampler = PatchSampler()
 
         # self.conv_decoder = nn.Sequential(
         #     ConvBlock(512, 512, 3, d_rate=2),
@@ -128,7 +128,7 @@ class VGG16Trans(nn.Module):
 
             # sample for pos
             query, feat_pos = self.sampler.sample_pos(feats, points, dis=dis[i].item(), examplers=examplers)
-            if self.args.sample_method == 'OnesMap':
+            if self.args.sample_method == 'APS':
                 patch_ids = ones_map[i]
             else:
                 patch_ids = torch.Tensor(neg_points[i])
@@ -139,7 +139,7 @@ class VGG16Trans(nn.Module):
                 loss = crit(q, f_k_pos, f_k_neg)
                 total_nce_loss += loss.mean()
 
-        return total_nce_loss * self.args.lambda_nce + mse_loss, mse_loss.item(),\
+        return total_nce_loss * self.args.lambda_nce + mse_loss, mse_loss.item(), \
                total_nce_loss.item() if isinstance(total_nce_loss, torch.Tensor) else total_nce_loss, y
 
     def ones2points(self, ones_map):

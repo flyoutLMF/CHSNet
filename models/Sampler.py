@@ -83,21 +83,21 @@ def getTensorLocsPatchList(tensor, patch_size, device, centers=None, count=600):
     return torch.Tensor(sample_locs), patches[1:]
 
 
-class PatchSampleNonlocal(nn.Module):
+class PatchSampler(nn.Module):
     def __init__(self, nc=128, num_patches=256,
-                 sample_method='NonLocal', feat_from='Attention', feat_get_method='Point'):
+                 sample_method='APS', feat_from='Attention', feat_get_method='Point'):
         """
         nc: the output feature dimension
         num_patches: the sampled patches number
         """
-        super(PatchSampleNonlocal, self).__init__()
+        super(PatchSampler, self).__init__()
         self.nc = nc
         self.num_patches = num_patches
         self.d_i = 0  # for debug visualization
         self.std = torch.Tensor([0.485, 0.456, 0.406])
         self.mean = torch.Tensor([0.229, 0.224, 0.225])
 
-        assert sample_method in ['NonLocal', 'Random', 'OnesMap']
+        assert sample_method in ['RS', 'LSS', 'APS']
         self.sample_method = sample_method
         assert feat_from in ['Encoder', 'Attention']
         self.feat_from = feat_from
@@ -135,7 +135,7 @@ class PatchSampleNonlocal(nn.Module):
         img = feats[0]  # get the original image
         if patch_ids is None:  # get non-local patch real time
             patch_size = [sample_patch.shape[2], sample_patch.shape[3]] if sample_patch is not None else [32, 32]
-            if self.sample_method == 'NonLocal':  # will take a lot of time
+            if self.sample_method == 'LSS':  # will take a lot of time
                 locs, patches = getTensorLocsPatchList(img, patch_size, img.device)  # get patches and location
                 diff_pow = 1. - torch.pow((patches - sample_patch), 2)
                 diff_sum = torch.sum(torch.sum(torch.sum(diff_pow, 2), 2), 1)  # calculate the unsimilar score
@@ -143,14 +143,14 @@ class PatchSampleNonlocal(nn.Module):
                 score, index = torch.topk(diff_sum, self.num_patches, largest=False, sorted=True)  # get the tops
                 patch_ids = locs[index]
                 patch_ids = patch_ids.to(torch.long)
-            elif self.sample_method == 'Random':
+            elif self.sample_method == 'RS':
                 B, C, H, W = img.shape
                 half_h, half_w = int(patch_size[0] / 2), int(patch_size[1] / 2)
                 patch_ids = torch.Tensor(np.random.randint([half_h, half_w], [H - half_h, W - half_w],
                                                            size=(self.num_patches, 2)))  # random patch_ids
             else:
                 raise NotImplementedError
-        elif self.sample_method == 'OnesMap':  # sample from the whole feature map, like similarity loss of BMNet
+        elif self.sample_method == 'APS':  # sample from the whole feature map, like similarity loss of BMNet
             assert self.feat_get_method == 'Point'
             ones_map = patch_ids.unsqueeze(0)  # the patch_ids is the ones_map of the points to be counted
             ones_map = F.max_pool2d(ones_map, 16).squeeze(1).squeeze(0)
@@ -211,7 +211,7 @@ class PatchSampleNonlocal(nn.Module):
         # img_show('ex', examplers[0])
 
         # max need to le the num of neg patches
-        if len(points) > self.num_patches and self.sample_method != 'OnesMap':
+        if len(points) > self.num_patches and self.sample_method != 'APS':
             points = points[:self.num_patches, :]
         exampler_pos = random.randint(0, len(points) - 1)
         points_torch = torch.tensor(points).long().cuda()

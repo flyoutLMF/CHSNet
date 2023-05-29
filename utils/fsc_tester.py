@@ -13,6 +13,7 @@ from models.convtrans import VGG16Trans
 from utils.trainer import Trainer
 
 import numpy as np
+import torch.nn.functional as F
 from tqdm import tqdm
 import json
 
@@ -109,10 +110,18 @@ class FSCTester(Trainer):
                 with torch.set_grad_enabled(False):
                     output = self.model(inputs)
                     pre_count = torch.sum(output) / self.args.log_param
-
-            np_img = np.clip(output.cpu().permute(0, 2, 3, 1).contiguous().squeeze(0).numpy() * 255, 0., 255.)
-            cv2.imwrite(os.path.join(root, name[0]), np.uint8(np_img))
-            # torchvision.io.image.write_png(output.cpu(), os.path.join(root, name[0]))
+            if True:
+                output = F.interpolate(output, size=(h, w), mode='bicubic', align_corners=True) / self.args.log_param
+                output = output / torch.max(output)
+                np_img = np.clip(output.cpu().permute(0, 2, 3, 1).contiguous().squeeze(0).squeeze(2).numpy() * 255, 0., 255.)
+                heatmap = cv2.applyColorMap(np.uint8(np_img), cv2.COLORMAP_JET)
+                # cv2.imshow(name[0], heatmap)
+                # cv2.waitKey()
+                np_img = np.clip(inputs.cpu().permute(0, 2, 3, 1).contiguous().squeeze(0).numpy() * 255, 0., 255.)
+                img = cv2.cvtColor(np.uint8(np_img), cv2.COLOR_RGB2BGR)
+                result_img = np.uint8(heatmap * 0.4 + img * 0.6)
+                cv2.imwrite(os.path.join(root, name[0]), result_img)
+                torchvision.io.image.write_png(output.cpu(), os.path.join(root, name[0]))
             result_json[name[0]] = {'gt': count[0].item(), 'pre': pre_count.item()}
             epoch_res.append(count[0].item() - pre_count.item())
             # epoch_res.append(count[0].item())
